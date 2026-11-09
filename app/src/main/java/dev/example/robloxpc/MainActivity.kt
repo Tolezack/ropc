@@ -34,14 +34,22 @@ class MainActivity : Activity() {
     }
 
     private fun refreshDevices() {
-        val abis = Build.SUPPORTED_ABIS.joinToString()
-        val devices = InputDevice.getDeviceIds().mapNotNull { InputDevice.getDevice(it) }
-        val keyboards = devices.filter {
-            it.sources and InputDevice.SOURCE_KEYBOARD == InputDevice.SOURCE_KEYBOARD
+        val abis: String = Build.SUPPORTED_ABIS.joinToString()
+        val keyboards = mutableListOf<InputDevice>()
+        val mice = mutableListOf<InputDevice>()
+
+        for (deviceId: Int in InputDevice.getDeviceIds()) {
+            val device: InputDevice = InputDevice.getDevice(deviceId) ?: continue
+            val sources: Int = device.sources
+
+            if ((sources and InputDevice.SOURCE_KEYBOARD) == InputDevice.SOURCE_KEYBOARD) {
+                keyboards.add(device)
+            }
+            if ((sources and InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE) {
+                mice.add(device)
+            }
         }
-        val mice = devices.filter {
-            it.sources and InputDevice.SOURCE_MOUSE == InputDevice.SOURCE_MOUSE
-        }
+
         status.text = listOf(
             "Roblox PC Mode — protótipo",
             "",
