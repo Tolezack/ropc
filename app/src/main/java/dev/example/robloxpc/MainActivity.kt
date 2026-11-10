@@ -277,7 +277,7 @@ private class DesktopView(activity: Activity) : View(activity) {
             drawText(canvas, lineText, left + 12f, baseline, 11f, color(0xB6E6C4))
             baseline += 19f
         }
-        drawText(canvas, "ropc@android:~$ $terminalInput_", left + 12f, bottom - 18f, 11f, color(0xFFFFFF))
+        drawText(canvas, "ropc@android:~$ ${terminalInput}_", left + 12f, bottom - 18f, 11f, color(0xFFFFFF))
     }
 
     private fun drawSettings(canvas: Canvas, x: Float, y: Float, w: Float) {
