@@ -41,6 +41,7 @@ class MainActivity : Activity() {
         private const val PICK_PROGRAM = 410
         private const val TERMUX_PACKAGE = "com.termux"
         private const val WINLATOR_PACKAGE = "com.winlator"
+        private const val WINLATOR_CMOD_PACKAGE = "com.winlator.cmod"
         private const val TERMUX_PERMISSION = "com.termux.permission.RUN_COMMAND"
         private const val SHARED_DIR = "/storage/emulated/0/Download/ROPC"
     }
@@ -137,7 +138,7 @@ class MainActivity : Activity() {
     }
 
     private fun refreshRuntimeStatus() {
-        val winlator = isPackageInstalled(WINLATOR_PACKAGE)
+        val winlator = isPackageInstalled(WINLATOR_PACKAGE) || isPackageInstalled(WINLATOR_CMOD_PACKAGE)
         val termux = isPackageInstalled(TERMUX_PACKAGE)
         runtimeView.text = buildString {
             append("RUNTIMES DETECTADOS\n")
@@ -285,6 +286,7 @@ class MainActivity : Activity() {
 
     private fun openWindowsProgram(program: StoredProgram) {
         val launchIntent = packageManager.getLaunchIntentForPackage(WINLATOR_PACKAGE)
+            ?: packageManager.getLaunchIntentForPackage(WINLATOR_CMOD_PACKAGE)
         if (launchIntent == null) {
             statusView.text = "Winlator não está instalado. O arquivo foi salvo em Download/ROPC."
             AlertDialog.Builder(this)
