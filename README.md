@@ -1,51 +1,37 @@
-# Roblox PC Mode Android — scaffold inicial
+# ROPC Desktop — simulador de PC para Android
 
-Protótipo Android nativo em Kotlin, configurado para compilar para `arm64-v8a` e
-`x86_64`, detectar teclado/mouse físicos e gerar APK pelo GitHub Actions.
+Aplicativo Android nativo em Kotlin que apresenta uma interface de desktop simulada, otimizada para uso com teclado e mouse físicos.
 
-## O que esta versão faz
+## O que está implementado
 
-- Compila um APK Android.
-- Inclui as ABIs Android `arm64-v8a` e `x86_64`.
-- Detecta teclado e mouse USB/Bluetooth conectados ao Android.
-- Não desenha botões virtuais.
-- Não usa streaming.
+- Área de trabalho com atalhos.
+- Menu Iniciar e barra de tarefas.
+- Janelas que podem ser movidas, minimizadas, maximizadas e fechadas.
+- Aplicativos demonstrativos: Este PC, Arquivos, Navegador, Terminal e Configurações.
+- Terminal local de demonstração com os comandos `help`, `about` e `clear`.
+- Atalhos básicos: tecla Meta abre o menu Iniciar, Esc fecha o menu e F4 fecha a janela ativa.
+- Detecção das arquiteturas Android suportadas e dos dispositivos de entrada físicos.
+- Compilação Android para ABIs `arm64-v8a` e `x86_64`.
 
-## O que esta versão NÃO faz
+## Limitações importantes
 
-Este repositório ainda não é um emulador Windows e não executa o Roblox para PC.
-Os filtros ABI definem as arquiteturas Android do APK; eles não emulam processadores
-Windows nem fornecem uma camada de compatibilidade.
+Este projeto é um **simulador de interface desktop**. Não é Windows, não emula um PC x86 e não executa programas Windows `.exe`. As janelas Arquivos e Navegador são demonstrativas e ainda não estão ligadas ao armazenamento ou à internet.
 
-Para executar aplicativos Windows no Android seria necessário integrar e manter
-uma camada de compatibilidade (por exemplo, Wine mais tradução de CPU e gráficos
-adequada para cada ABI). Isso exige componentes nativos específicos, licenças e
-testes de desempenho. Não há garantia de que o cliente Windows do Roblox funcione
-nesse ambiente ou seja aceito pelos mecanismos de segurança do Roblox. O projeto
-não falsifica a identidade do dispositivo, modifica o cliente ou contorna anti-cheat.
+A configuração `abiFilters` apenas define quais arquiteturas Android entram no APK; ela não cria emulação de CPU. Este projeto também não inclui Wine/Box64, não executa o cliente Roblox para Windows, não falsifica a identidade do aparelho e não tenta contornar mecanismos anti-cheat. Portanto, não há garantia de que o Roblox o reconheça como PC.
 
-## Gerar localmente
+## Compilar
 
 Requisitos: JDK 17 e Gradle 8.9.
 
 ```bash
-gradle :app:assembleDebug
+gradle --no-daemon :app:assembleDebug
 ```
 
-APK: `app/build/outputs/apk/debug/app-debug.apk`
+APK: `app/build/outputs/apk/debug/app-debug.apk`.
 
-## Gerar pelo GitHub Actions
+## GitHub Actions
 
-1. Crie um repositório no GitHub.
-2. Envie os arquivos deste projeto para a branch `main`.
-3. Abra **Actions → Build Android APK**.
-4. Execute com **Run workflow** ou faça push.
-5. Baixe o artefato `roblox-pc-android-debug` na execução concluída.
-
-## Próxima etapa técnica
-
-Antes de integrar um runtime Windows, validar:
-- ABI real do aparelho (`arm64-v8a` ou `x86_64`);
-- disponibilidade de Vulkan/OpenGL e extensões exigidas;
-- suporte a teclado e mouse no runtime escolhido;
-- compatibilidade com os termos e requisitos técnicos do Roblox.
+1. Abra **Actions** no repositório.
+2. Selecione **Build Android APK**.
+3. Aguarde a execução terminar.
+4. Baixe o artefato `roblox-pc-android-debug` quando a compilação for concluída com sucesso.
