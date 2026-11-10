@@ -193,7 +193,7 @@ private class DesktopView(activity: Activity) : View(activity) {
         val h = r.height()
 
         fill(canvas, RectF(dp(left + 3), dp(top + 5), dp(r.right + 3), dp(r.bottom + 5)), Color.argb(70, 0, 0, 0), 13f)
-        fill(canvas, r, color(0xF4F7FC), 12f)
+        fill(canvas, RectF(dp(r.left), dp(r.top), dp(r.right), dp(r.bottom)), color(0xF4F7FC), 12f)
         fill(canvas, RectF(dp(left), dp(top), dp(r.right), dp(top + titlebarHeight)), color(0x172B49), 12f)
         fill(canvas, RectF(dp(left), dp(top + 25f), dp(r.right), dp(top + titlebarHeight)), color(0x172B49), 0f)
 
