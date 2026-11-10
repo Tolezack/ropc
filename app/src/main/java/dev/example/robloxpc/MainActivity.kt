@@ -1,565 +1,435 @@
 package dev.example.robloxpc
 
 import android.app.Activity
-import android.graphics.Canvas
+import android.app.AlertDialog
+import android.content.ContentValues
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
-import android.graphics.LinearGradient
-import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.Shader
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.view.InputDevice
+import android.os.Environment
+import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.view.KeyEvent
-import android.view.MotionEvent
-import android.view.View
-import java.text.SimpleDateFormat
-import java.util.Date
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
+import java.io.File
+import java.io.IOException
 import java.util.Locale
-import kotlin.math.max
-import kotlin.math.min
 
 /**
- * ROPC Desktop: a local desktop-style interface running as a native Android app.
- * It is a user-interface simulator, not a Windows emulator or a Roblox client.
+ * ROPC Runner is a native Android launcher for user-selected program files.
+ *
+ * Windows executables are handed off to the installed Winlator app.
+ * Linux scripts/ELF files are handed off to Termux + a Debian proot-distro.
+ * No pretend Windows desktop or bundled fake terminal is shown.
  */
 class MainActivity : Activity() {
-    private lateinit var desktop: DesktopView
+    private lateinit var statusView: TextView
+    private lateinit var selectedView: TextView
+    private lateinit var runtimeView: TextView
+
+    private data class StoredProgram(val name: String, val absolutePath: String)
+
+    companion object {
+        private const val PICK_PROGRAM = 410
+        private const val TERMUX_PACKAGE = "com.termux"
+        private const val WINLATOR_PACKAGE = "com.winlator"
+        private const val TERMUX_PERMISSION = "com.termux.permission.RUN_COMMAND"
+        private const val SHARED_DIR = "/storage/emulated/0/Download/ROPC"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        desktop = DesktopView(this)
-        setContentView(desktop)
-        window.decorView.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-        )
-        desktop.isFocusableInTouchMode = true
-        desktop.requestFocus()
+        buildLauncher()
+        refreshRuntimeStatus()
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (::desktop.isInitialized) desktop.invalidate()
+    private fun buildLauncher() {
+        val background = Color.rgb(15, 19, 27)
+        val card = Color.rgb(27, 34, 46)
+        val accent = Color.rgb(54, 133, 224)
+        val secondary = Color.rgb(165, 178, 198)
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(28), dp(24), dp(24))
+            setBackgroundColor(background)
+        }
+
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(root)
+        }
+
+        val title = TextView(this).apply {
+            text = "ROPC Runner"
+            textSize = 29f
+            setTextColor(Color.WHITE)
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        root.addView(title, matchWrap())
+
+        val subtitle = TextView(this).apply {
+            text = "Abra programas reais usando runtimes instalados no Android."
+            textSize = 15f
+            setTextColor(secondary)
+            setPadding(0, dp(8), 0, dp(22))
+        }
+        root.addView(subtitle, matchWrap())
+
+        val chooseButton = Button(this).apply {
+            text = "ESCOLHER ARQUIVO (.EXE / .SH / ELF)"
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            setBackgroundTintList(android.content.res.ColorStateList.valueOf(accent))
+            setOnClickListener { openProgramPicker() }
+        }
+        root.addView(chooseButton, matchWrap())
+
+        selectedView = TextView(this).apply {
+            text = "Nenhum programa selecionado."
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            setBackgroundColor(card)
+        }
+        val selectedParams = matchWrap().apply { topMargin = dp(18) }
+        root.addView(selectedView, selectedParams)
+
+        runtimeView = TextView(this).apply {
+            textSize = 13f
+            setTextColor(secondary)
+            setPadding(dp(2), dp(18), dp(2), dp(8))
+        }
+        root.addView(runtimeView, matchWrap())
+
+        val explanation = TextView(this).apply {
+            text = "COMO FUNCIONA\n\n" +
+                "• .EXE / .MSI: o arquivo é copiado para Download/ROPC e o Winlator é aberto. " +
+                "No Winlator, selecione o arquivo e crie um atalho para executá-lo.\n\n" +
+                "• .SH / ELF Linux: o arquivo é copiado para Download/ROPC e enviado ao " +
+                "Termux para execução dentro de uma distribuição Debian via proot-distro.\n\n" +
+                "O ROPC não finge ser Windows e não desenha uma área de trabalho falsa."
+            textSize = 13f
+            setTextColor(secondary)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            setBackgroundColor(card)
+        }
+        val explanationParams = matchWrap().apply { topMargin = dp(12) }
+        root.addView(explanation, explanationParams)
+
+        statusView = TextView(this).apply {
+            text = "Pronto para selecionar um programa."
+            textSize = 13f
+            setTextColor(Color.rgb(133, 203, 159))
+            setPadding(dp(2), dp(18), dp(2), dp(4))
+        }
+        root.addView(statusView, matchWrap())
+
+        setContentView(scroll)
+    }
+
+    private fun refreshRuntimeStatus() {
+        val winlator = isPackageInstalled(WINLATOR_PACKAGE)
+        val termux = isPackageInstalled(TERMUX_PACKAGE)
+        runtimeView.text = buildString {
+            append("RUNTIMES DETECTADOS\n")
+            append("Winlator: ")
+            append(if (winlator) "instalado" else "não instalado")
+            append("\nTermux: ")
+            append(if (termux) "instalado" else "não instalado")
+            append("\nArquiteturas Android: ")
+            append(Build.SUPPORTED_ABIS.joinToString())
+            append("\n\nLinux exige Termux + proot-distro + Debian.")
+        }
+    }
+
+    private fun openProgramPicker() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        try {
+            startActivityForResult(intent, PICK_PROGRAM)
+        } catch (error: Exception) {
+            statusView.text = "Não foi possível abrir o seletor de arquivos: ${error.message}"
+        }
+    }
+
+    @Deprecated("Uses the platform document picker for compatibility with the current project.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != PICK_PROGRAM || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        statusView.text = "Copiando arquivo para Download/ROPC…"
+
+        Thread {
+            try {
+                val originalName = queryDisplayName(uri)
+                val stored = copyToSharedDownloads(uri, originalName)
+                runOnUiThread {
+                    selectedView.text = "Arquivo: ${stored.name}\nLocal: ${stored.absolutePath}"
+                    routeProgram(stored)
+                }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    statusView.text = "Não foi possível importar o arquivo: ${error.message}"
+                }
+            }
+        }.start()
+    }
+
+    private fun queryDisplayName(uri: Uri): String {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (index >= 0 && cursor.moveToFirst()) {
+                cursor.getString(index)?.takeIf { it.isNotBlank() }?.let { return it }
+            }
+        }
+        return "programa"
+    }
+
+    private fun safeFileName(rawName: String): String {
+        val cleaned = rawName
+            .substringAfterLast('/')
+            .replace(Regex("[^A-Za-z0-9._() -]"), "_")
+            .replace(' ', '_')
+            .trim('.', '_')
+            .take(100)
+        return cleaned.ifBlank { "programa.bin" }
+    }
+
+    private fun copyToSharedDownloads(source: Uri, originalName: String): StoredProgram {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            throw IOException("A importação automática exige Android 10 ou superior.")
+        }
+
+        val safeName = "${System.currentTimeMillis()}_${safeFileName(originalName)}"
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+            put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/ROPC")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+
+        val destination = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("O Android não permitiu criar o arquivo em Downloads/ROPC.")
+
+        try {
+            val input = contentResolver.openInputStream(source)
+                ?: throw IOException("Não foi possível ler o arquivo selecionado.")
+            val output = contentResolver.openOutputStream(destination, "w")
+                ?: throw IOException("Não foi possível gravar o arquivo importado.")
+            input.use { sourceStream -> output.use { targetStream -> sourceStream.copyTo(targetStream) } }
+
+            val completed = ContentValues().apply {
+                put(MediaStore.MediaColumns.IS_PENDING, 0)
+            }
+            contentResolver.update(destination, completed, null, null)
+        } catch (error: Exception) {
+            contentResolver.delete(destination, null, null)
+            throw error
+        }
+
+        return StoredProgram(
+            name = safeName,
+            absolutePath = "$SHARED_DIR/$safeName"
+        )
+    }
+
+    private fun routeProgram(program: StoredProgram) {
+        val extension = program.name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        when {
+            extension == "exe" || extension == "msi" -> openWindowsProgram(program)
+            extension == "sh" -> confirmLinuxProgram(program, isElf = false)
+            isElfFile(program.absolutePath) -> confirmLinuxProgram(program, isElf = true)
+            else -> {
+                statusView.text = "Formato não reconhecido. Escolha um .exe, .msi, .sh ou executável ELF Linux."
+            }
+        }
+    }
+
+    private fun isElfFile(path: String): Boolean {
+        return try {
+            val uri = MediaStore.Files.getContentUri("external")
+            contentResolver.query(
+                uri,
+                arrayOf(MediaStore.MediaColumns._ID),
+                "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=?",
+                arrayOf("Download/ROPC/", File(path).name),
+                null
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) return false
+                val id = cursor.getLong(0)
+                val fileUri = Uri.withAppendedPath(uri, id.toString())
+                contentResolver.openInputStream(fileUri)?.use { stream ->
+                    val header = ByteArray(4)
+                    stream.read(header) == 4 &&
+                        header[0] == 0x7f.toByte() &&
+                        header[1] == 'E'.code.toByte() &&
+                        header[2] == 'L'.code.toByte() &&
+                        header[3] == 'F'.code.toByte()
+                } ?: false
+            } ?: false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun openWindowsProgram(program: StoredProgram) {
+        val launchIntent = packageManager.getLaunchIntentForPackage(WINLATOR_PACKAGE)
+        if (launchIntent == null) {
+            statusView.text = "Winlator não está instalado. O arquivo foi salvo em Download/ROPC."
+            AlertDialog.Builder(this)
+                .setTitle("Instale um runtime Windows")
+                .setMessage("Para abrir .EXE no Android, este projeto usa o Winlator (Wine + Box86/Box64). O ROPC não contém um runtime Windows próprio. Depois de instalar, escolha o arquivo em Z:\\storage\\emulated\\0\\Download\\ROPC dentro do Winlator.")
+                .setNegativeButton("Fechar", null)
+                .setPositiveButton("Ver Winlator") { _, _ ->
+                    openWebPage("https://github.com/brunodev85/winlator/releases")
+                }
+                .show()
+            return
+        }
+
+        val winlatorPath = "Z:\\storage\\emulated\\0\\Download\\ROPC\\${program.name}"
+        AlertDialog.Builder(this)
+            .setTitle("Executável Windows importado")
+            .setMessage(
+                "O arquivo foi copiado para Download/ROPC. O Winlator não oferece uma API pública documentada para iniciar um .EXE diretamente por outro app; vou abrir o Winlator para você selecionar o arquivo e criar um atalho.\n\nCaminho no ambiente Wine:\n$winlatorPath"
+            )
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Abrir Winlator") { _, _ ->
+                try {
+                    startActivity(launchIntent)
+                    statusView.text = "Winlator aberto. Selecione o arquivo em Z:\\storage\\emulated\\0\\Download\\ROPC."
+                } catch (error: Exception) {
+                    statusView.text = "Não foi possível iniciar o Winlator: ${error.message}"
+                }
+            }
+            .show()
+    }
+
+    private fun confirmLinuxProgram(program: StoredProgram, isElf: Boolean) {
+        val kind = if (isElf) "executável ELF Linux" else "script Shell"
+        AlertDialog.Builder(this)
+            .setTitle("Executar $kind?")
+            .setMessage(
+                "O arquivo será executado dentro do Debian pelo Termux. Só execute arquivos de origem confiável. É necessário ter Termux, proot-distro e Debian instalados, além de permitir comandos externos no Termux.\n\nArquivo: ${program.name}"
+            )
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Executar") { _, _ -> runLinuxInTermux(program, isElf) }
+            .show()
+    }
+
+    private fun runLinuxInTermux(program: StoredProgram, isElf: Boolean) {
+        if (!isPackageInstalled(TERMUX_PACKAGE)) {
+            statusView.text = "Termux não está instalado. O arquivo foi salvo em Download/ROPC."
+            AlertDialog.Builder(this)
+                .setTitle("Instale o Termux")
+                .setMessage("Instale o Termux pelo projeto oficial. Depois configure proot-distro e Debian para executar programas Linux.")
+                .setPositiveButton("Ver Termux") { _, _ ->
+                    openWebPage("https://github.com/termux/termux-app/releases")
+                }
+                .setNegativeButton("Fechar", null)
+                .show()
+            return
+        }
+
+        if (checkSelfPermission(TERMUX_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            AlertDialog.Builder(this)
+                .setTitle("Permissão do Termux necessária")
+                .setMessage(
+                    "Ative a permissão adicional “Executar comandos no ambiente Termux” para o ROPC Runner nas configurações de aplicativos do Android. Depois, no Termux, configure allow-external-apps=true em ~/.termux/termux.properties e instale Debian com proot-distro."
+                )
+                .setNegativeButton("Agora não", null)
+                .setPositiveButton("Abrir permissões") { _, _ ->
+                    val settings = Intent(
+                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:$packageName")
+                    )
+                    startActivity(settings)
+                }
+                .show()
+            return
+        }
+
+        val guestPath = "/mnt/ropc/${program.name}"
+        val guestCommand = if (isElf) {
+            "chmod +x ${shellQuote(guestPath)} && exec ${shellQuote(guestPath)}"
+        } else {
+            "bash ${shellQuote(guestPath)}"
+        }
+        val termuxCommand = buildString {
+            append("if ! command -v proot-distro >/dev/null 2>&1; then ")
+            append("echo 'Runtime Linux ausente. Execute: pkg update && pkg install proot-distro'; exit 127; fi; ")
+            append("proot-distro login debian --bind ")
+            append(shellQuote("$SHARED_DIR:/mnt/ropc"))
+            append(" -- /bin/bash -lc ")
+            append(shellQuote(guestCommand))
+        }
+
+        val intent = Intent("com.termux.RUN_COMMAND").apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", termuxCommand))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", false)
+            putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "0")
+        }
+
+        try {
+            startService(intent)
+            statusView.text = "Comando enviado ao Termux. Se Debian ainda não estiver instalado, configure-o no Termux primeiro."
+        } catch (error: SecurityException) {
+            statusView.text = "Termux recusou o comando. Confira a permissão RUN_COMMAND e allow-external-apps."
+        } catch (error: Exception) {
+            statusView.text = "Não foi possível iniciar o Termux: ${error.message}"
+        }
+    }
+
+    private fun shellQuote(value: String): String {
+        return "'" + value.replace("'", "'\\''") + "'"
+    }
+
+    private fun isPackageInstalled(packageName: String): Boolean {
+        return try {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun openWebPage(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: Exception) {
+            statusView.text = "Não foi possível abrir o navegador."
+        }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (::desktop.isInitialized && desktop.handleKey(keyCode, event)) return true
-        return super.onKeyDown(keyCode, event)
-    }
-}
-
-private enum class DesktopApp(val title: String, val symbol: String) {
-    THIS_PC("Este PC", "PC"),
-    FILES("Arquivos", "AR"),
-    BROWSER("Navegador", "WEB"),
-    TERMINAL("Terminal", ">_"),
-    SETTINGS("Configurações", "CFG")
-}
-
-private data class DesktopWindow(
-    val app: DesktopApp,
-    var x: Float,
-    var y: Float,
-    var width: Float,
-    var height: Float,
-    var maximized: Boolean = false,
-    var minimized: Boolean = false
-)
-
-private class DesktopView(activity: Activity) : View(activity) {
-    private val density = resources.displayMetrics.density
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val windows = mutableListOf<DesktopWindow>()
-    private var activeWindow: DesktopWindow? = null
-    private var startMenuOpen = false
-    private var dragWindow: DesktopWindow? = null
-    private var downX = 0f
-    private var downY = 0f
-    private var dragOriginX = 0f
-    private var dragOriginY = 0f
-    private var dragged = false
-    private var terminalInput = ""
-    private val terminalLines = mutableListOf(
-        "ROPC Desktop Terminal",
-        "Digite help para ver os comandos disponíveis."
-    )
-
-    private val taskbarHeight = 54f
-    private val titlebarHeight = 38f
-    private val apps = DesktopApp.values()
-
-    private fun dp(value: Float): Float = value * density
-    private fun color(hex: Long): Int = Color.rgb(
-        ((hex shr 16) and 0xFF).toInt(),
-        ((hex shr 8) and 0xFF).toInt(),
-        (hex and 0xFF).toInt()
-    )
-
-    private fun drawText(
-        canvas: Canvas,
-        value: String,
-        x: Float,
-        baseline: Float,
-        size: Float = 14f,
-        tint: Int = Color.WHITE,
-        bold: Boolean = false
-    ) {
-        paint.shader = null
-        paint.color = tint
-        paint.textSize = dp(size)
-        paint.typeface = if (bold) android.graphics.Typeface.create(
-            "sans-serif", android.graphics.Typeface.BOLD
-        ) else android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
-        canvas.drawText(value, dp(x), dp(baseline), paint)
-    }
-
-    private fun fill(canvas: Canvas, rect: RectF, tint: Int, radius: Float = 0f) {
-        paint.shader = null
-        paint.color = tint
-        canvas.drawRoundRect(rect, dp(radius), dp(radius), paint)
-    }
-
-    private fun line(canvas: Canvas, x1: Float, y1: Float, x2: Float, y2: Float, tint: Int, width: Float = 1f) {
-        paint.shader = null
-        paint.color = tint
-        paint.strokeWidth = dp(width)
-        canvas.drawLine(dp(x1), dp(y1), dp(x2), dp(y2), paint)
-    }
-
-    private fun screenWidth(): Float = width / density
-    private fun screenHeight(): Float = height / density
-    private fun taskbarTop(): Float = screenHeight() - taskbarHeight
-
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        val sw = screenWidth()
-        val sh = screenHeight()
-
-        paint.shader = LinearGradient(
-            0f, 0f, width.toFloat(), height.toFloat(),
-            color(0x102B55), color(0x176B78), Shader.TileMode.CLAMP
-        )
-        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
-        paint.shader = null
-
-        // Abstract desktop wallpaper shapes.
-        paint.color = Color.argb(28, 255, 255, 255)
-        canvas.drawCircle(width * 0.78f, height * 0.30f, dp(150f), paint)
-        paint.color = Color.argb(18, 255, 255, 255)
-        canvas.drawCircle(width * 0.84f, height * 0.40f, dp(230f), paint)
-
-        drawText(canvas, "ROPC DESKTOP", 18f, 30f, 12f, color(0xDCEBFF), true)
-        drawDesktopIcons(canvas)
-
-        windows.filter { !it.minimized }.forEach { drawWindow(canvas, it) }
-        if (startMenuOpen) drawStartMenu(canvas)
-        drawTaskbar(canvas, sw, sh)
-    }
-
-    private fun drawDesktopIcons(canvas: Canvas) {
-        val labels = listOf(
-            DesktopApp.THIS_PC,
-            DesktopApp.FILES,
-            DesktopApp.BROWSER,
-            DesktopApp.TERMINAL,
-            DesktopApp.SETTINGS
-        )
-        labels.forEachIndexed { index, app ->
-            val top = 56f + index * 76f
-            val box = RectF(dp(18f), dp(top), dp(62f), dp(top + 42f))
-            fill(canvas, box, Color.argb(55, 255, 255, 255), 10f)
-            drawText(canvas, app.symbol, 27f, top + 27f, 13f, Color.WHITE, true)
-            drawText(canvas, app.title, 12f, top + 57f, 10f, Color.WHITE)
-        }
-    }
-
-    private fun windowBounds(win: DesktopWindow): RectF {
-        if (win.maximized) {
-            return RectF(8f, 8f, screenWidth() - 8f, taskbarTop() - 6f)
-        }
-        return RectF(win.x, win.y, win.x + win.width, win.y + win.height)
-    }
-
-    private fun drawWindow(canvas: Canvas, win: DesktopWindow) {
-        val r = windowBounds(win)
-        val left = r.left
-        val top = r.top
-        val w = r.width()
-        val h = r.height()
-
-        fill(canvas, RectF(dp(left + 3), dp(top + 5), dp(r.right + 3), dp(r.bottom + 5)), Color.argb(70, 0, 0, 0), 13f)
-        fill(canvas, RectF(dp(r.left), dp(r.top), dp(r.right), dp(r.bottom)), color(0xF4F7FC), 12f)
-        fill(canvas, RectF(dp(left), dp(top), dp(r.right), dp(top + titlebarHeight)), color(0x172B49), 12f)
-        fill(canvas, RectF(dp(left), dp(top + 25f), dp(r.right), dp(top + titlebarHeight)), color(0x172B49), 0f)
-
-        drawText(canvas, win.app.symbol, left + 14f, top + 25f, 12f, color(0xA8D8FF), true)
-        drawText(canvas, win.app.title, left + 48f, top + 25f, 13f, Color.WHITE, true)
-
-        val buttonY = top + 19f
-        val closeX = r.right - 22f
-        val maxX = r.right - 48f
-        val minX = r.right - 74f
-        fill(canvas, RectF(dp(minX - 8), dp(buttonY - 12), dp(minX + 8), dp(buttonY + 12)), color(0x29415F), 5f)
-        fill(canvas, RectF(dp(maxX - 8), dp(buttonY - 12), dp(maxX + 8), dp(buttonY + 12)), color(0x29415F), 5f)
-        fill(canvas, RectF(dp(closeX - 8), dp(buttonY - 12), dp(closeX + 8), dp(buttonY + 12)), color(0xB94B57), 5f)
-        line(canvas, minX - 4f, buttonY + 3f, minX + 4f, buttonY + 3f, Color.WHITE, 1.5f)
-        fill(canvas, RectF(dp(maxX - 4f), dp(buttonY - 5f), dp(maxX + 4f), dp(buttonY + 3f)), Color.TRANSPARENT, 0f)
-        line(canvas, maxX - 4f, buttonY - 5f, maxX + 4f, buttonY - 5f, Color.WHITE, 1f)
-        line(canvas, maxX - 4f, buttonY - 5f, maxX - 4f, buttonY + 3f, Color.WHITE, 1f)
-        line(canvas, maxX + 4f, buttonY - 5f, maxX + 4f, buttonY + 3f, Color.WHITE, 1f)
-        line(canvas, maxX - 4f, buttonY + 3f, maxX + 4f, buttonY + 3f, Color.WHITE, 1f)
-        line(canvas, closeX - 3f, buttonY - 4f, closeX + 3f, buttonY + 4f, Color.WHITE, 1.5f)
-        line(canvas, closeX + 3f, buttonY - 4f, closeX - 3f, buttonY + 4f, Color.WHITE, 1.5f)
-
-        val contentTop = top + titlebarHeight + 18f
-        val contentLeft = left + 20f
-        when (win.app) {
-            DesktopApp.THIS_PC -> drawThisPc(canvas, contentLeft, contentTop, w)
-            DesktopApp.FILES -> drawFiles(canvas, contentLeft, contentTop, w)
-            DesktopApp.BROWSER -> drawBrowser(canvas, contentLeft, contentTop, w)
-            DesktopApp.TERMINAL -> drawTerminal(canvas, contentLeft, contentTop, w, h)
-            DesktopApp.SETTINGS -> drawSettings(canvas, contentLeft, contentTop, w)
-        }
-    }
-
-    private fun drawThisPc(canvas: Canvas, x: Float, y: Float, w: Float) {
-        drawText(canvas, "Bem-vindo ao ROPC Desktop", x, y + 4f, 19f, color(0x20334F), true)
-        drawText(canvas, "Um ambiente de desktop local dentro do Android.", x, y + 30f, 12f, color(0x58677B))
-        val (keyboards, mice) = inputCounts()
-        val rows = listOf(
-            "Arquitetura Android: ${Build.SUPPORTED_ABIS.joinToString()}",
-            "Teclados físicos detectados: $keyboards",
-            "Mouses físicos detectados: $mice",
-            "Modo: simulador de interface desktop"
-        )
-        rows.forEachIndexed { index, value ->
-            val yy = y + 74f + index * 34f
-            fill(canvas, RectF(dp(x), dp(yy - 18f), dp(x + min(w - 40f, 500f)), dp(yy + 9f)), color(0xE7EDF5), 6f)
-            drawText(canvas, value, x + 12f, yy, 11f, color(0x263A55))
-        }
-        drawText(canvas, "Isto não é Windows e não executa aplicativos .exe.", x, y + 235f, 11f, color(0x8C3E45), true)
-    }
-
-    private fun drawFiles(canvas: Canvas, x: Float, y: Float, w: Float) {
-        drawText(canvas, "Explorador de arquivos", x, y + 4f, 18f, color(0x20334F), true)
-        drawText(canvas, "Área demonstrativa — integração com arquivos Android ainda não ativada.", x, y + 29f, 11f, color(0x58677B))
-        val entries = listOf("Este PC", "Armazenamento do dispositivo", "Downloads", "Documentos")
-        entries.forEachIndexed { index, name ->
-            val yy = y + 75f + index * 42f
-            fill(canvas, RectF(dp(x), dp(yy - 24f), dp(x + min(w - 40f, 420f)), dp(yy + 10f)), color(0xE7EDF5), 6f)
-            drawText(canvas, "▰", x + 12f, yy, 14f, color(0x287BBE), true)
-            drawText(canvas, name, x + 40f, yy, 12f, color(0x263A55))
-        }
-    }
-
-    private fun drawBrowser(canvas: Canvas, x: Float, y: Float, w: Float) {
-        drawText(canvas, "Navegador", x, y + 4f, 18f, color(0x20334F), true)
-        fill(canvas, RectF(dp(x), dp(y + 24f), dp(x + min(w - 40f, 520f)), dp(y + 58f)), color(0xE7EDF5), 8f)
-        drawText(canvas, "Endereço da página (demonstração)", x + 12f, y + 46f, 11f, color(0x66758A))
-        drawText(canvas, "O navegador ainda não está conectado à internet.", x, y + 92f, 12f, color(0x263A55))
-        drawText(canvas, "Esta janela é parte da interface simulada.", x, y + 116f, 11f, color(0x66758A))
-    }
-
-    private fun drawTerminal(canvas: Canvas, x: Float, y: Float, w: Float, h: Float) {
-        val left = x - 8f
-        val top = y - 8f
-        val right = x + min(w - 24f, 620f)
-        val bottom = top + max(120f, h - titlebarHeight - 28f)
-        fill(canvas, RectF(dp(left), dp(top), dp(right), dp(bottom)), color(0x101923), 8f)
-        var baseline = top + 26f
-        val maxLines = max(3, ((bottom - top - 66f) / 19f).toInt())
-        terminalLines.takeLast(maxLines).forEach { lineText ->
-            drawText(canvas, lineText, left + 12f, baseline, 11f, color(0xB6E6C4))
-            baseline += 19f
-        }
-        drawText(canvas, "ropc@android:~$ ${terminalInput}_", left + 12f, bottom - 18f, 11f, color(0xFFFFFF))
-    }
-
-    private fun drawSettings(canvas: Canvas, x: Float, y: Float, w: Float) {
-        drawText(canvas, "Configurações", x, y + 4f, 18f, color(0x20334F), true)
-        val rows = listOf(
-            "Interface: ROPC Desktop",
-            "Entrada: teclado e mouse físicos",
-            "ABIs: ${Build.SUPPORTED_ABIS.joinToString()}",
-            "Streaming: desativado",
-            "Botões virtuais de jogo: não utilizados"
-        )
-        rows.forEachIndexed { index, value ->
-            drawText(canvas, value, x, y + 42f + index * 30f, 12f, color(0x354A65))
-            line(canvas, x, y + 51f + index * 30f, x + min(w - 40f, 480f), y + 51f + index * 30f, color(0xD9E1EA))
-        }
-    }
-
-    private fun drawStartMenu(canvas: Canvas) {
-        val left = 12f
-        val top = taskbarTop() - 232f
-        val right = min(screenWidth() - 12f, 286f)
-        fill(canvas, RectF(dp(left + 2), dp(top + 4), dp(right + 2), dp(taskbarTop() - 8f)), Color.argb(90, 0, 0, 0), 14f)
-        fill(canvas, RectF(dp(left), dp(top), dp(right), dp(taskbarTop() - 12f)), color(0xF1F5FB), 14f)
-        drawText(canvas, "ROPC", left + 16f, top + 28f, 16f, color(0x20334F), true)
-        drawText(canvas, "Aplicativos", left + 16f, top + 52f, 10f, color(0x69788C), true)
-        apps.forEachIndexed { index, app ->
-            val rowTop = top + 62f + index * 32f
-            fill(canvas, RectF(dp(left + 8f), dp(rowTop), dp(right - 8f), dp(rowTop + 28f)), color(0xE5ECF5), 6f)
-            drawText(canvas, app.symbol, left + 18f, rowTop + 19f, 10f, color(0x2774B9), true)
-            drawText(canvas, app.title, left + 52f, rowTop + 19f, 11f, color(0x263A55))
-        }
-    }
-
-    private fun drawTaskbar(canvas: Canvas, sw: Float, sh: Float) {
-        fill(canvas, RectF(0f, dp(sh - taskbarHeight), dp(sw), dp(sh)), color(0xE8162943), 0f)
-        fill(canvas, RectF(dp(12f), dp(sh - 44f), dp(104f), dp(sh - 10f)), color(0x2D4565), 10f)
-        drawText(canvas, "⊞  Iniciar", 25f, sh - 22f, 12f, Color.WHITE, true)
-
-        val taskApps = windows.filter { true }
-        taskApps.take(5).forEachIndexed { index, win ->
-            val x = 120f + index * 78f
-            val tint = if (win == activeWindow && !win.minimized) color(0x42668E) else color(0x233A58)
-            fill(canvas, RectF(dp(x), dp(sh - 44f), dp(x + 70f), dp(sh - 10f)), tint, 8f)
-            drawText(canvas, win.app.symbol.take(4), x + 10f, sh - 22f, 10f, Color.WHITE, true)
-        }
-        val clock = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-        drawText(canvas, clock, max(120f, sw - 58f), sh - 22f, 12f, Color.WHITE, true)
-    }
-
-    private fun inputCounts(): Pair<Int, Int> {
-        var keyboardCount = 0
-        var mouseCount = 0
-        for (id in InputDevice.getDeviceIds()) {
-            val device = InputDevice.getDevice(id) ?: continue
-            if (device.isVirtual) continue
-            if ((device.sources and InputDevice.SOURCE_KEYBOARD) == InputDevice.SOURCE_KEYBOARD) keyboardCount++
-            if ((device.sources and InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE) mouseCount++
-        }
-        return keyboardCount to mouseCount
-    }
-
-    private fun openApp(app: DesktopApp) {
-        windows.firstOrNull { it.app == app }?.let {
-            it.minimized = false
-            windows.remove(it)
-            windows.add(it)
-            activeWindow = it
-            startMenuOpen = false
-            invalidate()
-            return
-        }
-        val sw = screenWidth()
-        val sh = taskbarTop()
-        val winWidth = min(650f, max(280f, sw - 30f))
-        val winHeight = min(440f, max(210f, sh - 40f))
-        val win = DesktopWindow(
-            app = app,
-            x = max(8f, (sw - winWidth) / 2f),
-            y = max(8f, (sh - winHeight) / 2f - 8f),
-            width = winWidth,
-            height = winHeight
-        )
-        windows.add(win)
-        activeWindow = win
-        startMenuOpen = false
-        invalidate()
-    }
-
-    private fun closeWindow(win: DesktopWindow) {
-        windows.remove(win)
-        if (activeWindow == win) activeWindow = windows.lastOrNull { !it.minimized }
-        invalidate()
-    }
-
-    private fun handleTap(x: Float, y: Float) {
-        val sw = screenWidth()
-        val sh = screenHeight()
-        if (y >= taskbarTop()) {
-            if (x <= 112f) {
-                startMenuOpen = !startMenuOpen
-                invalidate()
-                return
-            }
-            val index = ((x - 120f) / 78f).toInt()
-            val taskApps = windows.take(5)
-            if (index >= 0 && index < taskApps.size) {
-                val win = taskApps[index]
-                win.minimized = !win.minimized
-                if (!win.minimized) {
-                    windows.remove(win)
-                    windows.add(win)
-                    activeWindow = win
-                } else {
-                    activeWindow = windows.lastOrNull { !it.minimized }
-                }
-                invalidate()
-            }
-            return
-        }
-
-        if (startMenuOpen) {
-            val top = taskbarTop() - 232f
-            if (x in 12f..286f && y >= top + 62f && y < top + 62f + apps.size * 32f) {
-                val index = ((y - (top + 62f)) / 32f).toInt()
-                if (index in apps.indices) openApp(apps[index])
-                return
-            }
-            startMenuOpen = false
-        }
-
-        val win = windows.lastOrNull { !it.minimized && windowBounds(it).contains(x, y) }
-        if (win != null) {
-            activeWindow = win
-            val r = windowBounds(win)
-            if (y <= r.top + titlebarHeight) {
-                when {
-                    x >= r.right - 34f -> closeWindow(win)
-                    x >= r.right - 60f -> {
-                        win.maximized = !win.maximized
-                        invalidate()
-                    }
-                    x >= r.right - 86f -> {
-                        win.minimized = true
-                        activeWindow = windows.lastOrNull { !it.minimized && it != win }
-                        invalidate()
-                    }
-                }
-            }
-            invalidate()
-            return
-        }
-
-        val iconIndex = ((y - 56f) / 76f).toInt()
-        if (x <= 92f && iconIndex in apps.indices && y >= 56f && y < 56f + apps.size * 76f) {
-            openApp(apps[iconIndex])
-        }
-        invalidate()
-    }
-
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        val x = event.x / density
-        val y = event.y / density
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                downX = x
-                downY = y
-                dragged = false
-                val hit = windows.lastOrNull { !it.minimized && windowBounds(it).contains(x, y) }
-                if (hit != null) {
-                    activeWindow = hit
-                    val r = windowBounds(hit)
-                    if (!hit.maximized && y <= r.top + titlebarHeight && x < r.right - 88f) {
-                        dragWindow = hit
-                        dragOriginX = hit.x
-                        dragOriginY = hit.y
-                    } else {
-                        dragWindow = null
-                    }
-                    windows.remove(hit)
-                    windows.add(hit)
-                } else {
-                    dragWindow = null
-                }
-                invalidate()
-                return true
-            }
-            MotionEvent.ACTION_MOVE -> {
-                val target = dragWindow
-                if (target != null) {
-                    val dx = x - downX
-                    val dy = y - downY
-                    if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > 3f) dragged = true
-                    if (dragged) {
-                        target.x = max(0f, min(screenWidth() - target.width, dragOriginX + dx))
-                        target.y = max(0f, min(taskbarTop() - titlebarHeight, dragOriginY + dy))
-                        invalidate()
-                    }
-                }
-                return true
-            }
-            MotionEvent.ACTION_UP -> {
-                if (!dragged) handleTap(x, y)
-                dragWindow = null
-                performClick()
-                return true
-            }
-            MotionEvent.ACTION_CANCEL -> {
-                dragWindow = null
-                return true
-            }
-        }
-        return true
-    }
-
-    override fun performClick(): Boolean {
-        super.performClick()
-        return true
-    }
-
-    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        if (event.action == MotionEvent.ACTION_HOVER_MOVE || event.action == MotionEvent.ACTION_SCROLL) {
+        if (keyCode == KeyEvent.KEYCODE_O && event.isCtrlPressed) {
+            openProgramPicker()
             return true
         }
-        return super.onGenericMotionEvent(event)
+        return super.onKeyDown(keyCode, event)
     }
 
-    fun handleKey(keyCode: Int, event: KeyEvent): Boolean {
-        if (event.action != KeyEvent.ACTION_DOWN) return false
-        if (activeWindow?.app == DesktopApp.TERMINAL) {
-            when (keyCode) {
-                KeyEvent.KEYCODE_DEL -> {
-                    if (terminalInput.isNotEmpty()) terminalInput = terminalInput.dropLast(1)
-                    invalidate()
-                    return true
-                }
-                KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                    runTerminalCommand()
-                    invalidate()
-                    return true
-                }
-                else -> {
-                    val character = event.unicodeChar
-                    if (character != 0 && !character.toChar().isISOControl()) {
-                        terminalInput += character.toChar()
-                        invalidate()
-                        return true
-                    }
-                }
-            }
-        }
-        when (keyCode) {
-            KeyEvent.KEYCODE_ESCAPE -> {
-                if (startMenuOpen) {
-                    startMenuOpen = false
-                    invalidate()
-                    return true
-                }
-            }
-            KeyEvent.KEYCODE_F4 -> {
-                activeWindow?.let { closeWindow(it) }
-                return true
-            }
-            KeyEvent.KEYCODE_META_LEFT, KeyEvent.KEYCODE_META_RIGHT -> {
-                startMenuOpen = !startMenuOpen
-                invalidate()
-                return true
-            }
-        }
-        return false
-    }
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private fun runTerminalCommand() {
-        val command = terminalInput.trim()
-        terminalLines.add("ropc@android:~$ $command")
-        when (command.lowercase(Locale.ROOT)) {
-            "help" -> terminalLines.add("Comandos: help, about, clear")
-            "about" -> terminalLines.add("ROPC Desktop é uma interface simulada em Android.")
-            "clear" -> terminalLines.clear()
-            "" -> Unit
-            else -> terminalLines.add("Comando não encontrado: $command")
-        }
-        terminalInput = ""
-        if (terminalLines.size > 80) terminalLines.subList(0, terminalLines.size - 80).clear()
+    private fun matchWrap(): LinearLayout.LayoutParams {
+        return LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
     }
 }
