@@ -29,8 +29,8 @@ class MainActivity : Activity() {
         private const val RUN_COMMAND_PERMISSION = "com.termux.permission.RUN_COMMAND"
         private const val SCRIPT_URL =
             "https://raw.githubusercontent.com/Tolezack/ropc/main/scripts/ropc-cordial.sh"
-        private const val SCRIPT_HOME = "\$HOME/.local/share/ropc-cordial"
-        private const val SCRIPT_PATH = "\$SCRIPT_HOME/ropc-cordial.sh"
+        private const val SCRIPT_HOME = "/data/data/com.termux/files/home/.local/share/ropc-cordial"
+        private const val SCRIPT_PATH = "/data/data/com.termux/files/home/.local/share/ropc-cordial/ropc-cordial.sh"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
