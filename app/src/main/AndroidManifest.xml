@@ -5,6 +5,7 @@
 
     <queries>
         <package android:name="com.termux" />
+        <package android:name="com.termux.x11" />
         <package android:name="com.winlator" />
         <package android:name="com.winlator.cmod" />
     </queries>
