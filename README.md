@@ -1,64 +1,65 @@
-# ROPC Runner
+# ROPC — Cordial ARM64 launcher (experimental)
 
-ROPC Runner is a small native Android launcher. It does **not** display a pretend Windows desktop and does not claim to be a full PC emulator.
+ROPC is a native Android controller for launching **Cordial** inside Termux + Debian ARM64. It does not draw a fake Windows desktop and is not itself an emulator.
 
-## Current behavior
+## Target device
 
-- Opens Android's real document picker.
-- Copies selected programs to `Download/ROPC`.
-- `.EXE` / `.MSI`: detects Winlator and opens its app. The file is copied to shared storage so the user can select it inside Winlator and create a shortcut.
-- `.SH` / Linux ELF: can hand off the command to Termux using its documented `RUN_COMMAND` service, targeting a Debian container managed by `proot-distro`.
-- Supports physical keyboard shortcut `Ctrl+O` to select a file.
-- Android APK is built for `arm64-v8a` and `x86_64`.
+The current test target is a Samsung Galaxy A16 5G (Exynos 1330 / Mali-G68), Android 16, ARM64, 4 KB memory pages. The device's Termux environment has already reported the physical Mali-G68 Vulkan device. Vulkan access from inside Debian/proot still needs to be confirmed.
 
-## Windows programs
+## What the APK does
 
-Install Winlator from its official release page:
+- Shows whether Termux and Termux:X11 are installed.
+- Uses Termux's `RUN_COMMAND` service to run a setup script.
+- Installs `proot-distro` and a Debian ARM64 root filesystem.
+- Downloads the official Cordial 0.34.1 ARM64 Debian package and an Android Vulkan wrapper package.
+- Verifies both downloads against pinned SHA-256 values before installing them.
+- Starts Termux:X11 and launches Cordial after checking that Debian can see the Mali-G68 Vulkan device.
 
-https://github.com/brunodev85/winlator/releases
+## Required apps and one-time permission
 
-Winlator uses Wine and Box86/Box64 to run Windows applications. ROPC copies the executable into `Download/ROPC` and opens Winlator. Since this project does not use a documented public Winlator API for launching an arbitrary EXE from another app, the user must select the file inside Winlator and create a shortcut. The expected Wine path is:
+1. Install Termux from the official project: https://github.com/termux/termux-app/releases
+2. Install the Termux:X11 Android companion APK: https://github.com/termux/termux-x11/releases
+3. In Termux, edit `~/.termux/termux.properties` and set:
+   `allow-external-apps=true`
+4. Run `termux-reload-settings`.
+5. In Android Settings → Apps → ROPC → Permissions, allow the Termux command permission if Android presents it.
 
-`Z:\storage\emulated\0\Download\ROPC\<filename>`
+The APK's **Preparar Cordial + Debian** button runs `scripts/ropc-cordial.sh setup`. The **Iniciar Roblox** button runs `scripts/ropc-cordial.sh run`.
 
-Compatibility is not guaranteed for every Windows program. This project does not modify Roblox, spoof a Windows device, or bypass anti-cheat.
-
-## Linux programs
-
-Install Termux from the official project:
-
-https://github.com/termux/termux-app/releases
-
-In Termux, install a Debian root filesystem:
+For manual setup from Termux, download the script from this repository and run:
 
 ```sh
-pkg update
-pkg install proot-distro
-proot-distro install debian
-termux-setup-storage
+curl -fL https://raw.githubusercontent.com/Tolezack/ropc/main/scripts/ropc-cordial.sh -o ~/ropc-cordial.sh
+chmod +x ~/ropc-cordial.sh
+bash ~/ropc-cordial.sh setup
+bash ~/ropc-cordial.sh run
 ```
 
-Then allow external commands:
-1. In Termux, edit `~/.termux/termux.properties`.
-2. Set `allow-external-apps=true`.
-3. Run `termux-reload-settings`.
-4. In Android Settings → Apps → ROPC Runner → Permissions, grant the additional permission to run commands in Termux, if Android shows it.
+The initial Debian and Cordial downloads need a stable internet connection and several GB of free storage are recommended. On first Cordial launch, press **Download Roblox**; Cordial downloads the Android client and verifies Roblox's signing certificate.
 
-Termux must also be allowed to read shared storage. ROPC copies the file to:
+## GPU handoff
 
-`/storage/emulated/0/Download/ROPC`
+The setup installs the ARM64 `vulkan-wrapper-android` package inside Debian and selects its ICD JSON when present. The run script calls `vulkaninfo --summary` inside Debian and refuses to launch if it does not see `Mali-G68`, so it does not silently fall back to software rendering.
 
-The Linux binary must match the Debian container architecture, or the user must separately configure an appropriate QEMU user-mode emulator for cross-architecture execution. Linux GUI programs may need a graphical server such as Termux:X11; the current handoff is for terminal programs and scripts.
+If this check fails, the wrapper/driver bridge is not working in the guest yet. It does **not** mean the phone's Android Vulkan driver is missing: the Termux-side test and the Debian/proot-side test are separate.
 
-## Important limitations
+## Important limits
 
-- Android does not natively run Windows PE executables or generic GNU/Linux ELF binaries as desktop programs.
-- ROPC does not bundle Wine, Box64, QEMU, a Debian root filesystem, or a Windows environment.
-- Winlator and Termux are separate runtime apps that must be installed and configured by the user.
-- The Winlator path/shortcut step is manual because no supported public external-launch API is used here.
-- Selecting and executing untrusted programs can damage data. Only run files you trust.
+- Cordial runs Roblox's **official Android build** natively on Linux ARM64. It does not run the Windows Roblox Player.
+- Some experiences can still show a mobile/touch interface or reject Android clients. This does not guarantee access to experiences that require the Windows/PC client.
+- Cordial's ARM64 packages are published, but the Cordial project says real ARM64 phones have not yet been tested. This ROPC integration is experimental.
+- Cordial currently targets Wayland; X11 is supported but rougher. The ROPC script explicitly selects X11 because the current phone setup uses Termux:X11.
+- Cordial 0.34.1 notes that Android ImageReader video decoding is unsupported in that release.
+- Do not use this project to modify Roblox, impersonate Windows, or bypass anti-cheat.
 
-## Build
+## Sources
+
+- Cordial: https://github.com/luohoa97/cordial
+- Cordial installation guide: https://github.com/luohoa97/cordial/blob/main/docs/install.md
+- Cordial ARM64 status: https://github.com/luohoa97/cordial/blob/main/docs/multiarch.md
+- Termux:X11: https://github.com/termux/termux-x11
+
+## Build the APK
 
 Requires JDK 17 and Gradle 8.9:
 
@@ -68,4 +69,4 @@ gradle --no-daemon :app:assembleDebug
 
 APK: `app/build/outputs/apk/debug/app-debug.apk`.
 
-GitHub Actions builds the APK on pushes to `main`.
+GitHub Actions builds the debug APK on pushes to `main`.
