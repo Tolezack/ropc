@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-MODE="\${1:-help}"
+MODE="${1:-help}"
 APP_HOME="$HOME/.local/share/ropc-cordial"
 CACHE="$APP_HOME/cache"
 DEBIAN_ROOT="$PREFIX/var/lib/proot-distro/installed-rootfs/debian"
